@@ -124,112 +124,200 @@ Bu bölümde ele alınmayacaktır.
 
 ## Önemli Uyarılar
 
-sp_Blitz tarafından raporlanan bazı önemli uyarı tipleri aşağıda listelenmiştir:
-
-- High Priority Issues
-
-- Performance Issues
-
-- Security Issues
-
-- Best Practices
+SQL Server'da sp_Blitz tarafından tespit edilen belirli indeks uyarıları ve bu uyarıların anlamları ile çözümleri aşağıda detaylandırılmıştır. Her bir uyarının ne anlama geldiğini, bu uyarılara karşı alınması gereken aksiyonları ve gerekli SQL sorgularını içermektedir.
 
 ## Alınması Gereken Aksiyonlar
 
-sp_Blitz tarafından raporlanan bazı önemli uyarı tipleri ve bu uyarılara karşı alınması gereken aksiyonlar aşağıda listelenmiştir.
+### 1. Multiple Index Personalities: Duplicate Keys
 
-### 1. High Priority Issues
+#### Anlamı
+Bu uyarı, aynı tablo üzerinde aynı anahtar sütunlarına sahip birden fazla indeks olduğunu gösterir. Bu durum, gereksiz indekslerin varlığına ve kaynakların israfına işaret eder.
+### Çözüm
 
-- Missing Backups: Veritabanınızın yedeklenmediğini veya son yedeklemenin çok eski olduğunu gösterir.
+### SQL Sorguları
+**İndeksleri Belirleme:**
+```sql
+SELECT
+   t.name AS TableName,
+   i.name AS IndexName,
+   i.index_id AS IndexID,
+   ic.index_column_id AS IndexColumnID,
+   col.name AS ColumnName
+FROM
+   sys.indexes i
+INNER JOIN
+   sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+INNER JOIN
+   sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
+INNER JOIN
+   sys.tables t ON i.object_id = t.object_id
+WHERE
+   t.name = '' --tablo adı
+ORDER BY
+   t.name, i.index_id, ic.index_column_id;
+```
+**Gereksiz İndeksi Kaldırma:**
+```sql
+DROP INDEX IndexName ON TableName;
+```
+## 2. Multiple Index Personalities: Borderline Duplicate Keys
+### Anlamı
+Bu uyarı, benzer ancak tamamen aynı olmayan anahtar sütunlarına sahip birden fazla indeks olduğunu gösterir. Bu indeksler, gereksiz yere performans kaybına neden olabilir.
+### Çözüm
 
-  **Yapılması Gerekenler:**
+### SQL Sorguları
+**İndeksleri Belirleme ve Kullanım Analizi:**
+```sql
+SELECT
+   OBJECT_NAME(s.object_id) AS TableName,
+   i.name AS IndexName,
+   i.index_id AS IndexID,
+   s.user_seeks,
+   s.user_scans,
+   s.user_lookups,
+   s.user_updates
+FROM
+   sys.dm_db_index_usage_stats s
+INNER JOIN
+   sys.indexes i ON s.object_id = i.object_id AND s.index_id = i.index_id
+WHERE
+   OBJECTPROPERTY(s.object_id, 'IsUserTable') = 1
+   AND OBJECT_NAME(s.object_id) = '' -- tablo adı
+ORDER BY
+   s.user_seeks DESC;
+```
+**Gereksiz İndeksi Kaldırma:**
+```sql
+DROP INDEX IndexName ON TableName;
+```
+## 3. Indexaphobia: High Value Missing Index
+### Anlamı
+Bu uyarı, yüksek değere sahip eksik bir indeks olduğunu gösterir. Bu, belirli sorguların performansını ciddi şekilde artırabilecek bir indeksin eksik olduğunu belirtir.
+### Çözüm
 
-  - Veritabanının düzenli olarak yedeklendiğinden emin olunmalıdır.
+### SQL Sorguları
+**Eksik İndeks Önerilerini Belirleme:**
+```sql
+SELECT
+   migs.avg_total_user_cost * migs.avg_user_impact * (migs.user_seeks + migs.user_scans) AS improvement_measure,
+   OBJECT_NAME(mid.object_id) AS TableName,
+   mid.equality_columns,
+   mid.inequality_columns,
+   mid.included_columns,
+   migs.*
+FROM
+   sys.dm_db_missing_index_group_stats AS migs
+INNER JOIN
+   sys.dm_db_missing_index_groups AS mig ON migs.group_handle = mig.index_group_handle
+INNER JOIN
+   sys.dm_db_missing_index_details AS mid ON mig.index_handle = mid.index_handle
+WHERE
+   mid.database_id = DB_ID('') --DB adı
+ORDER BY
+   improvement_measure DESC;
+```
+**Eksik İndeksi Oluşturma:**
+```sql
+CREATE INDEX IndexName ON TableName (Column1, Column2) INCLUDE (Column3, Column4);
+```
+## 4. Aggressive Indexes & Under-Indexing: Total Lock Wait Time > 5 Minutes (Row + Page)
+### Anlamı
+Bu uyarı, toplam kilit bekleme süresinin 5 dakikayı aştığını gösterir. Bu durum, agresif indeksleme veya yetersiz indeksleme nedeniyle ortaya çıkabilir.
+### Çözüm
 
-  - Yedeklemeleri gözden geçirin ve otomatik yedekleme talimatı oluşturulması tavsiye ediliyor.
-
-- Long Running Queries: Çok uzun süren sorgular bulunduğunu gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - Uzun süren sorguları optimize edilmeli.
-
-  - Sorguların indeks kullanımını kontrol edin ve gerekirse yeni indeksler oluşturun.
-
-### 2. Performance Issues
-
-- Missing Indexes: Veritabanınızda eksik indeksler olduğunu gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - sp_Blitz'in önerdiği eksik indeksleri oluşturun.
-
-  - İndeks oluştururken, sorgu performansını artıracak şekilde tasarlanması önemlidir.
-
-- High CPU Usage: SQL Server'ın yüksek CPU kullanımına sahip olduğunu gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - CPU kullanımını artıran sorguların belirlenmesi ve optimize edilmesi önemlidir.
-
-### 3. Security Issues
-
-- Open Permissions: Veritabanınızda gereksiz geniş izinler verildiğini gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - Kullanıcı izinlerini gözden geçirin ve sadece gerekli olan izinleri verin.
-
-  - Gereksiz geniş yetkileri kaldırın.
-
-- Weak Passwords: Zayıf şifreler kullanıldığını gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - Kullanıcı şifre politikalarını güçlendirin.
-
-  - Şifreleri periyodik olarak değiştirmelerini sağlayın.
-
-- SQL Injection Vulnerabilities: Veritabanında SQL enjeksiyonu saldırılarına karşı savunmasız olduğunu gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - Tüm sorgu parametrelerinin güvenli bir şekilde işlendiğinden emin olun.
-
-  - Parametreli sorgular kullanın ve kullanıcı girdilerini doğrulayın.
-
-  - Güvenlik duvarı ve diğer güvenlik önlemlerini uygulayın.
-
-#### Unencrypted Connections
-
-**Uyarı Açıklaması:**
-
-- Veritabanına yapılan bağlantıların şifrelenmediğini gösterir.
-
-**Yapılması Gerekenler:**
-
-- Veritabanı bağlantılarını şifrelemek için SSL/TLS kullanın.
-
-- Veritabanı sunucusu ve istemciler arasında güvenli bağlantılar sağlamak için gerekli ayarları yapın.
-
-### 4. Best Practices
-
-- Auto-Growth Settings: Veritabanı otomatik büyüme ayarlarının optimal olmadığını gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - Otomatik büyüme ayarlarını optimize edin (örneğin, yüzde yerine sabit MB değerleri kullanın).
-
-  - Veri ve log dosyalarının büyüme oranlarını uygun şekilde ayarlayın.
-
-- Database Maintenance: Veritabanı bakım işlemlerinin düzgün yapılmadığını gösterir.
-
-  **Yapılması Gerekenler:**
-
-  - Veritabanı bakım planlarını gözden geçirin ve düzenli bakım yapıldığından emin olun.
-
-  - İndeks yeniden düzenleme, istatistik güncelleme ve bütünlük kontrollerini gerçekleştirmek önemlidir.
-
+### SQL Sorguları
+**Kilit Bekleme Sürelerini Belirleme:**
+```sql
+SELECT
+   request_session_id AS SPID,
+   resource_type,
+   resource_description,
+   request_mode,
+   request_status
+FROM
+   sys.dm_tran_locks
+WHERE
+   resource_type IN ('OBJECT', 'PAGE', 'RID', 'KEY')
+ORDER BY
+   request_session_id;
+```
+**Kilitlenmelere Neden Olan Sorguları Belirleme:**
+```sql
+SELECT
+   blocking_session_id AS BlockingSessionID,
+   session_id AS VictimSessionID,
+   wait_type,
+   wait_time,
+   resource_description
+FROM
+   sys.dm_exec_requests
+WHERE
+   blocking_session_id <> 0;
+```
+**Kilitlenmelere Neden Olan İndeksi Kaldırma:**
+```sql
+DROP INDEX IndexName ON TableName;
+```
+## 5. Index Hoarder: NC Index with High Writes:Reads
+### Anlamı
+Bu uyarı, yüksek yazma işlemine sahip ancak okunma işlemleri nispeten düşük olan non-clustered bir indeksi gösterir. Bu indeksler, yazma performansını olumsuz etkileyebilir.
+### Çözüm
+Yüksek yazma ve düşük okuma oranına sahip indeksleri analiz edip gerekirse kaldırın veya optimize edin.
+### SQL Sorguları
+**İndeks Kullanım Analizi:**
+```sql
+SELECT
+   OBJECT_NAME(s.object_id) AS TableName,
+   i.name AS IndexName,
+   i.index_id AS IndexID,
+   s.user_seeks,
+   s.user_scans,
+   s.user_lookups,
+   s.user_updates
+FROM
+   sys.dm_db_index_usage_stats s
+INNER JOIN
+   sys.indexes i ON s.object_id = i.object_id AND s.index_id = i.index_id
+WHERE
+   OBJECTPROPERTY(s.object_id, 'IsUserTable') = 1
+   AND OBJECT_NAME(s.object_id) = 'YourTableName'
+ORDER BY
+   s.user_updates DESC;
+```
+**Gereksiz İndeksi Kaldırma:**
+```sql
+DROP INDEX IndexName ON TableName;
+```
+## 6. Index Hoarder: Unused NC Index with High Writes
+### Anlamı
+Bu uyarı, yüksek yazma işlemine sahip ancak kullanılmayan non-clustered bir indeksi gösterir. Bu indeksler, gereksiz kaynak tüketimine neden olur.
+### Çözüm
+Kullanılmayan ve yüksek yazma yüküne sahip indeksleri belirleyip kaldırın.
+### SQL Sorguları
+**İndeks Kullanım Analizi:**
+```sql
+SELECT
+   OBJECT_NAME(s.object_id) AS TableName,
+   i.name AS IndexName,
+   i.index_id AS IndexID,
+   s.user_seeks,
+   s.user_scans,
+   s.user_lookups,
+   s.user_updates
+FROM
+   sys.dm_db_index_usage_stats s
+INNER JOIN
+   sys.indexes i ON s.object_id = i.object_id AND s.index_id = i.index_id
+WHERE
+   OBJECTPROPERTY(s.object_id, 'IsUserTable') = 1
+   AND OBJECT_NAME(s.object_id) = '' --tablo adı
+ORDER BY
+   s.user_updates DESC;
+```
+**Gereksiz İndeksi Kaldırma:**
+```sql
+DROP INDEX IndexName ON TableName;
+```
 ## Sonuç
 
 Bu dökümantasyon, SQL Server'da sp_Blitz kullanarak indekslerin nasıl analiz edileceğini ve optimize edileceğini açıklamaktadır. Ayrıca, sp_Blitz'in belirli uyarı tipleri ve bu uyarılara karşı alınması gereken aksiyonlar detaylı bir şekilde açıklanmıştır.
