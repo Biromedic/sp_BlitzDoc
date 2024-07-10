@@ -322,6 +322,9 @@ DROP INDEX IndexName ON TableName;
 
 Bu dökümantasyon, SQL Server'da sp_Blitz kullanarak indekslerin nasıl analiz edileceğini ve optimize edileceğini açıklamaktadır. Ayrıca, sp_Blitz'in belirli uyarı tipleri ve bu uyarılara karşı alınması gereken aksiyonlar detaylı bir şekilde açıklanmıştır.
 
+
+ **Author: Birkan Cemil ABACI**
+ 
 ## Kaynaklar
 
 - [sys.dm_db_index_usage_stats Transact-SQL](https://docs.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-db-index-usage-stats-transact-sql)
